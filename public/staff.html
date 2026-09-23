@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guest Requests · Staff</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🛎️ Guest Requests</div>
+    <nav>
+      <span class="small muted" id="live">Connecting…</span>
+      <span class="small" id="me"></span>
+      <a class="btn btn-sm hidden" id="admin-link" href="/admin">Rooms &amp; QR codes</a>
+      <button class="btn-sm" id="sound-btn" type="button">🔔 Sound on</button>
+      <button class="btn-sm" id="logout" type="button">Sign out</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div class="stats" id="stats"></div>
+
+    <div class="filters">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-scope="open" aria-selected="true">Open</button>
+        <button type="button" role="tab" data-scope="all" aria-selected="false">Last 7 days</button>
+        <button type="button" role="tab" data-scope="rooms" aria-selected="false">Rooms</button>
+      </div>
+      <span class="spacer"></span>
+      <label class="small muted" for="department">Department</label>
+      <select id="department"><option value="">All departments</option></select>
+      <input id="search" type="search" placeholder="Room number…" aria-label="Filter by room number" class="small">
+    </div>
+
+    <div class="board" id="board"></div>
+
+    <div class="card hidden" id="rooms-view">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Room</th><th>Floor</th><th>Open requests</th><th>Status</th><th>Current stay since</th><th></th></tr></thead>
+          <tbody id="rooms-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <dialog id="reply-dialog">
+    <form id="reply-form" method="dialog">
+      <h2>Reply to guest</h2>
+      <p class="small muted" id="reply-context"></p>
+      <div class="field">
+        <label for="reply-text">Message shown on the guest's phone</label>
+        <textarea id="reply-text" maxlength="500" rows="3" placeholder="e.g. Housekeeping will arrive in 15 minutes."></textarea>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="reply-cancel">Cancel</button>
+        <button type="submit" class="btn-primary">Send</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/staff.js"></script>
+</body>
+</html>

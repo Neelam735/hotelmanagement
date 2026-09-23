@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1f5eff">
+  <title>Room Services</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="guest-header">
+    <h1 id="hotel-name">Loading…</h1>
+    <div class="room" id="room-label"></div>
+    <p class="small" id="welcome"></p>
+  </header>
+
+  <main class="guest-main stack">
+    <div id="error" class="card hidden"><div class="alert" id="error-text"></div></div>
+
+    <section class="card" id="services-card">
+      <h2>How can we help?</h2>
+      <div class="service-grid" id="services"></div>
+    </section>
+
+    <section class="card" id="requests-card">
+      <h2>Your requests</h2>
+      <div id="requests"><p class="muted">No requests yet. Tap a service above to get started.</p></div>
+    </section>
+
+    <section class="card stack" id="room-card">
+      <div class="switch">
+        <div>
+          <strong>Do Not Disturb</strong>
+          <div class="small muted">Housekeeping will not knock while this is on.</div>
+        </div>
+        <input type="checkbox" id="dnd" role="switch" aria-label="Do not disturb">
+      </div>
+    </section>
+
+    <section class="card hidden" id="info-card">
+      <h2>Hotel info</h2>
+      <div class="info-list" id="info"></div>
+    </section>
+  </main>
+
+  <dialog id="request-dialog">
+    <form id="request-form" method="dialog">
+      <h2 id="dialog-title"></h2>
+      <p class="muted small" id="dialog-desc"></p>
+      <div id="dialog-fields"></div>
+      <div class="field">
+        <label for="note">Anything else we should know? <span class="muted small">(optional)</span></label>
+        <textarea id="note" maxlength="500" rows="2"></textarea>
+      </div>
+      <div class="alert hidden" id="dialog-error"></div>
+      <div class="dialog-actions">
+        <button type="button" id="dialog-cancel">Cancel</button>
+        <button type="submit" class="btn-primary" id="dialog-submit">Send request</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/guest.js"></script>
+</body>
+</html>

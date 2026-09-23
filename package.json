@@ -1,0 +1,29 @@
+{
+  "name": "hotelmanagement",
+  "version": "1.0.0",
+  "description": "QR-based in-room guest services for hotels: guests scan a QR code to request housekeeping, laundry, room service and more instead of calling reception.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neelam735/hotelmanagement.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Neelam735/hotelmanagement/issues"
+  },
+  "homepage": "https://github.com/Neelam735/hotelmanagement#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "qrcode": "^1.5.4"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.5"
+  }
+}

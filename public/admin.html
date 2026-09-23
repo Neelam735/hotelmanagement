@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hotel Admin</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">⚙️ Hotel Admin</div>
+    <nav>
+      <a class="btn btn-sm" href="/staff">← Guest requests</a>
+      <button class="btn-sm" id="logout" type="button">Sign out</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="rooms" aria-selected="true">Rooms &amp; QR codes</button>
+      <button type="button" role="tab" data-tab="staff" aria-selected="false">Staff</button>
+      <button type="button" role="tab" data-tab="settings" aria-selected="false">Hotel settings</button>
+      <button type="button" role="tab" data-tab="account" aria-selected="false">My password</button>
+    </div>
+
+    <!-- Rooms -->
+    <section id="tab-rooms" class="stack">
+      <div class="card stack">
+        <h2>Add rooms</h2>
+        <form id="room-form" class="row">
+          <input id="room-number" placeholder="Room number, e.g. 101" aria-label="Room number" maxlength="20">
+          <input id="room-floor" placeholder="Floor (optional)" aria-label="Floor" maxlength="20">
+          <button class="btn-primary" type="submit">Add room</button>
+        </form>
+        <form id="range-form" class="row">
+          <input id="range-from" type="number" min="0" placeholder="From, e.g. 101" aria-label="From room number">
+          <input id="range-to" type="number" min="0" placeholder="To, e.g. 120" aria-label="To room number">
+          <input id="range-floor" placeholder="Floor (optional)" aria-label="Floor" maxlength="20">
+          <button type="submit">Add range</button>
+        </form>
+      </div>
+
+      <div class="card stack">
+        <div class="row">
+          <h2>Rooms</h2>
+          <span class="spacer"></span>
+          <a class="btn btn-primary" href="/admin/qr-print" target="_blank" rel="noopener">🖨️ Print all QR codes</a>
+        </div>
+        <p class="small muted">Place each room's QR code on the desk or bedside table, where the extension phone used to be.
+          Guests scan it with their phone camera — no app needed.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Room</th><th>Floor</th><th>QR code</th><th>Guest link</th><th></th></tr></thead>
+            <tbody id="rooms-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Staff -->
+    <section id="tab-staff" class="stack hidden">
+      <div class="card stack">
+        <h2>Add staff member</h2>
+        <form id="staff-form" class="stack">
+          <div class="row">
+            <input id="staff-name" placeholder="Full name" aria-label="Full name" required maxlength="80">
+            <input id="staff-username" placeholder="Username" aria-label="Username" required autocapitalize="none">
+            <input id="staff-password" type="password" placeholder="Password (min 8 chars)" aria-label="Password" required minlength="8" autocomplete="new-password">
+          </div>
+          <div class="row">
+            <select id="staff-department" aria-label="Department"><option value="">All departments</option></select>
+            <select id="staff-role" aria-label="Role">
+              <option value="staff">Staff</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button class="btn-primary" type="submit">Add</button>
+          </div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Department</th><th></th></tr></thead>
+            <tbody id="staff-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="tab-settings" class="hidden">
+      <form id="settings-form" class="card stack narrow">
+        <h2>Hotel settings</h2>
+        <p class="small muted">Shown to guests on the room page.</p>
+        <div class="field"><label for="s-hotel_name">Hotel name</label><input id="s-hotel_name" maxlength="100"></div>
+        <div class="field"><label for="s-welcome_message">Welcome message</label><textarea id="s-welcome_message" maxlength="500"></textarea></div>
+        <div class="field"><label for="s-reception_phone">Reception phone (for emergencies)</label><input id="s-reception_phone" maxlength="30"></div>
+        <div class="field"><label for="s-wifi_name">Wi-Fi network name</label><input id="s-wifi_name" maxlength="100"></div>
+        <div class="field"><label for="s-wifi_password">Wi-Fi password</label><input id="s-wifi_password" maxlength="100"></div>
+        <button class="btn-primary" type="submit">Save settings</button>
+      </form>
+    </section>
+
+    <!-- Account -->
+    <section id="tab-account" class="hidden">
+      <form id="password-form" class="card stack narrow">
+        <h2>Change my password</h2>
+        <div class="field"><label for="pw-current">Current password</label><input id="pw-current" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password" minlength="8" required></div>
+        <button class="btn-primary" type="submit">Change password</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>
