@@ -3,9 +3,10 @@ const crypto = require('node:crypto');
 const express = require('express');
 const QRCode = require('qrcode');
 
-const { openDatabase, newRoomToken } = require('./db');
+const { openDatabase, newRoomToken, newPin } = require('./db');
 const { createAuth, hashPassword, verifyPassword, parseCookies } = require('./auth');
 const { createEventHub } = require('./events');
+const { computeDueAt, isValidTimeZone } = require('./schedule');
 const {
   DEPARTMENTS,
   SERVICES,
@@ -36,6 +37,15 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILURES = 10;
 const NOTE_MAX = 500;
 const REPLY_MAX = 500;
+
+// Timed requests (wake-up calls, taxis…): staff are alerted this long before
+// the due time, and the request counts as overdue this long after it.
+const REMIND_BEFORE_MS = 5 * 60 * 1000;
+const SCHEDULED_GRACE_MS = 15 * 60 * 1000;
+
+// Stay PIN guessing limit, per room (a 4-digit PIN has 10,000 values).
+const PIN_WINDOW_MS = 15 * 60 * 1000;
+const PIN_MAX_FAILURES = 10;
 
 function createApp(options = {}) {
   const {
@@ -80,19 +90,41 @@ function createApp(options = {}) {
                 WHERE x.room_id = r.id AND x.status IN ('new','acknowledged','in_progress')) AS open_requests
          FROM rooms r ORDER BY CAST(r.number AS INTEGER), r.number`
     ),
-    insertRoom: db.prepare('INSERT INTO rooms (number, floor, token) VALUES (?, ?, ?)'),
+    insertRoom: db.prepare('INSERT INTO rooms (number, floor, token, pin) VALUES (?, ?, ?, ?)'),
+    setPin: db.prepare('UPDATE rooms SET pin = ? WHERE id = ?'),
     deleteRoom: db.prepare('DELETE FROM rooms WHERE id = ?'),
     setRoomToken: db.prepare('UPDATE rooms SET token = ? WHERE id = ?'),
     setDnd: db.prepare('UPDATE rooms SET dnd = ? WHERE id = ?'),
     checkout: db.prepare(
-      `UPDATE rooms SET dnd = 0, stay_started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+      `UPDATE rooms SET dnd = 0, pin = ?, stay_started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
     ),
+    forgetGuestDevices: db.prepare('DELETE FROM guest_devices WHERE room_id = ?'),
+    guestVerified: db.prepare(
+      'SELECT 1 AS ok FROM guest_devices WHERE device_id = ? AND room_id = ? AND stay_started_at = ?'
+    ),
+    verifyGuestDevice: db.prepare(
+      `INSERT INTO guest_devices (device_id, room_id, stay_started_at) VALUES (?, ?, ?)
+       ON CONFLICT (device_id, room_id) DO UPDATE
+         SET stay_started_at = excluded.stay_started_at,
+             verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`
+    ),
+    menuAvailable: db.prepare('SELECT * FROM menu_items WHERE available = 1 ORDER BY category, name'),
+    menuAll: db.prepare('SELECT * FROM menu_items ORDER BY category, name'),
+    menuById: db.prepare('SELECT * FROM menu_items WHERE id = ?'),
+    insertMenuItem: db.prepare(
+      'INSERT INTO menu_items (category, name, description, price, veg, available) VALUES (?, ?, ?, ?, ?, ?)'
+    ),
+    updateMenuItem: db.prepare(
+      'UPDATE menu_items SET category = ?, name = ?, description = ?, price = ?, veg = ?, available = ? WHERE id = ?'
+    ),
+    deleteMenuItem: db.prepare('DELETE FROM menu_items WHERE id = ?'),
     cancelOpenForRoom: db.prepare(
       `UPDATE requests SET status = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE room_id = ? AND status IN ('new','acknowledged','in_progress')`
     ),
     insertRequest: db.prepare(
-      'INSERT INTO requests (room_id, service, department, details, note, device_id) VALUES (?, ?, ?, ?, ?, ?)'
+      `INSERT INTO requests (room_id, service, department, details, note, device_id, due_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ),
     requestById: db.prepare(
       `SELECT x.*, r.number AS room_number, r.dnd AS room_dnd
@@ -125,13 +157,16 @@ function createApp(options = {}) {
     staffById: db.prepare('SELECT id, role FROM staff WHERE id = ?'),
   };
 
+  let settingsCache = null;
   function getSettings() {
-    return Object.fromEntries(q.settings.all().map((r) => [r.key, r.value]));
+    settingsCache ??= Object.fromEntries(q.settings.all().map((r) => [r.key, r.value]));
+    return settingsCache;
   }
 
   function formatRequest(row, { forGuest = false } = {}) {
     const service = SERVICE_MAP.get(row.service);
     const details = JSON.parse(row.details || '{}');
+    const settings = getSettings();
     const out = {
       id: row.id,
       roomNumber: row.room_number,
@@ -140,10 +175,11 @@ function createApp(options = {}) {
       icon: service ? service.icon : '❔',
       department: row.department,
       details,
-      summary: summarize(service, details),
+      summary: summarize(service, details, { currency: settings.currency }),
       note: row.note || '',
       status: row.status,
       staffReply: row.staff_reply || '',
+      dueAt: row.due_at || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -151,8 +187,26 @@ function createApp(options = {}) {
       out.roomId = row.room_id;
       out.roomDnd = Boolean(row.room_dnd);
       out.handledBy = row.handled_by || '';
+      // When the dashboard should start alerting about this request.
+      const due = row.due_at ? Date.parse(row.due_at) : null;
+      out.remindAt = due ? new Date(due - REMIND_BEFORE_MS).toISOString() : null;
+      out.overdueAt = new Date(
+        due ? due + SCHEDULED_GRACE_MS : Date.parse(row.created_at) + Number(settings.overdue_minutes || 10) * 60000
+      ).toISOString();
     }
     return out;
+  }
+
+  function formatMenuItem(row) {
+    return {
+      id: row.id,
+      category: row.category,
+      name: row.name,
+      description: row.description || '',
+      price: row.price,
+      veg: row.veg === null ? null : Boolean(row.veg),
+      available: Boolean(row.available),
+    };
   }
 
   function formatRoom(row) {
@@ -161,6 +215,7 @@ function createApp(options = {}) {
       number: row.number,
       floor: row.floor || '',
       dnd: Boolean(row.dnd),
+      pin: row.pin,
       stayStartedAt: row.stay_started_at,
       openRequests: row.open_requests ?? undefined,
     };
@@ -256,31 +311,69 @@ function createApp(options = {}) {
     next();
   }
 
+  // With the stay PIN enabled, a phone must have entered the current stay's
+  // PIN. Checkout starts a new stay, so previous guests are locked out.
+  function guestHasAccess(deviceId, room) {
+    if (getSettings().require_pin !== 'true') return true;
+    return Boolean(q.guestVerified.get(deviceId, room.id, room.stay_started_at));
+  }
+
+  function requireGuestAccess(req, res, next) {
+    if (!guestHasAccess(req.deviceId, req.room)) {
+      return res.status(403).json({ error: 'Please enter your room code first.', locked: true });
+    }
+    next();
+  }
+
   app.get('/api/guest/:token', loadRoom, (req, res) => {
     const s = getSettings();
+    const hotel = { name: s.hotel_name, receptionPhone: s.reception_phone, welcomeMessage: s.welcome_message };
+    if (!guestHasAccess(req.deviceId, req.room)) {
+      return res.json({ hotel, room: { number: req.room.number }, locked: true });
+    }
     res.json({
-      hotel: {
-        name: s.hotel_name,
-        receptionPhone: s.reception_phone,
-        wifiName: s.wifi_name,
-        wifiPassword: s.wifi_password,
-        welcomeMessage: s.welcome_message,
-      },
+      hotel: { ...hotel, wifiName: s.wifi_name, wifiPassword: s.wifi_password, timezone: s.timezone, currency: s.currency },
       room: { number: req.room.number, dnd: Boolean(req.room.dnd) },
       services: SERVICES,
+      menu: q.menuAvailable.all().map(formatMenuItem),
       requests: q.guestRequests
         .all(req.room.id, req.deviceId, req.room.stay_started_at)
         .map((r) => formatRequest(r, { forGuest: true })),
     });
   });
 
-  app.post('/api/guest/:token/requests', loadRoom, (req, res) => {
+  const pinFailures = new Map(); // room id -> [timestamps]
+  app.post('/api/guest/:token/verify', loadRoom, (req, res) => {
+    const room = req.room;
+    const cutoff = Date.now() - PIN_WINDOW_MS;
+    const recent = (pinFailures.get(room.id) || []).filter((t) => t > cutoff);
+    if (recent.length >= PIN_MAX_FAILURES) {
+      return res.status(429).json({ error: 'Too many wrong codes. Please wait a few minutes or ask reception.' });
+    }
+    const pin = String(req.body?.pin ?? '').trim();
+    const ok =
+      /^\d{4}$/.test(pin) && room.pin && crypto.timingSafeEqual(Buffer.from(pin), Buffer.from(room.pin.padEnd(4)));
+    if (!ok) {
+      recent.push(Date.now());
+      pinFailures.set(room.id, recent);
+      return res.status(400).json({ error: 'That code is not correct. Please check and try again.' });
+    }
+    pinFailures.delete(room.id);
+    q.verifyGuestDevice.run(req.deviceId, room.id, room.stay_started_at);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/guest/:token/requests', loadRoom, requireGuestAccess, (req, res) => {
     const room = req.room;
     const service = SERVICE_MAP.get(req.body?.service);
     if (!service) return res.status(400).json({ error: 'Unknown service.' });
 
-    const result = validateDetails(service, req.body.details);
+    const menu = new Map(q.menuAvailable.all().map((m) => [m.id, m]));
+    const result = validateDetails(service, req.body.details, { menu });
     if (!result.ok) return res.status(400).json({ error: result.error });
+
+    const schedule = computeDueAt(service.schedule, result.details, getSettings().timezone);
+    if (schedule.error) return res.status(400).json({ error: schedule.error });
 
     const note = typeof req.body.note === 'string' ? req.body.note.trim() : '';
     if (note.length > NOTE_MAX) return res.status(400).json({ error: `Note is too long (max ${NOTE_MAX} characters).` });
@@ -299,14 +392,15 @@ function createApp(options = {}) {
       service.department,
       JSON.stringify(result.details),
       note || null,
-      req.deviceId
+      req.deviceId,
+      schedule.dueAt ? schedule.dueAt.toISOString() : null
     );
     const row = q.requestById.get(info.lastInsertRowid);
     publishRequest('request:new', row);
     res.status(201).json({ request: formatRequest(row, { forGuest: true }) });
   });
 
-  app.post('/api/guest/:token/requests/:id/cancel', loadRoom, (req, res) => {
+  app.post('/api/guest/:token/requests/:id/cancel', loadRoom, requireGuestAccess, (req, res) => {
     const row = q.requestById.get(Number(req.params.id));
     if (!row || row.room_id !== req.room.id || row.device_id !== req.deviceId) {
       return res.status(404).json({ error: 'Request not found.' });
@@ -320,14 +414,14 @@ function createApp(options = {}) {
     res.json({ request: formatRequest(updated, { forGuest: true }) });
   });
 
-  app.post('/api/guest/:token/dnd', loadRoom, (req, res) => {
+  app.post('/api/guest/:token/dnd', loadRoom, requireGuestAccess, (req, res) => {
     const dnd = Boolean(req.body?.dnd);
     q.setDnd.run(dnd ? 1 : 0, req.room.id);
     hub.publish('room:update', { roomId: req.room.id, room: formatRoom(q.roomById.get(req.room.id)) });
     res.json({ dnd });
   });
 
-  app.get('/api/guest/:token/stream', loadRoom, (req, res) => {
+  app.get('/api/guest/:token/stream', loadRoom, requireGuestAccess, (req, res) => {
     const { id: roomId, token } = req.room;
     const deviceId = req.deviceId;
     hub.subscribe(
@@ -335,8 +429,10 @@ function createApp(options = {}) {
       res,
       (type, payload) => {
         if (payload.roomId !== roomId) return false;
-        // Stop streaming to a link that has been replaced with a new QR code.
-        if (q.roomByToken.get(token)?.id !== roomId) return 'drop';
+        // Stop streaming to a link that has been replaced with a new QR code,
+        // or to a phone whose stay has ended.
+        const room = q.roomByToken.get(token);
+        if (room?.id !== roomId || !guestHasAccess(deviceId, room)) return 'drop';
         return type === 'room:update' || payload.deviceId === deviceId;
       },
       (type, payload) =>
@@ -387,7 +483,14 @@ function createApp(options = {}) {
 
   // ---------------------------------------------------------------- staff API
   app.get('/api/meta', auth.requireStaff, (req, res) => {
-    res.json({ departments: DEPARTMENTS, services: SERVICES, statuses: STATUSES });
+    const s = getSettings();
+    res.json({
+      departments: DEPARTMENTS,
+      services: SERVICES,
+      statuses: STATUSES,
+      timezone: s.timezone,
+      currency: s.currency,
+    });
   });
 
   app.get('/api/staff/requests', auth.requireStaff, (req, res) => {
@@ -444,10 +547,25 @@ function createApp(options = {}) {
   app.post('/api/staff/rooms/:id/checkout', auth.requireStaff, (req, res) => {
     const room = q.roomById.get(Number(req.params.id));
     if (!room) return res.status(404).json({ error: 'Room not found.' });
+    const pin = newPin();
     q.cancelOpenForRoom.run(room.id);
-    q.checkout.run(room.id);
+    q.checkout.run(pin, room.id);
+    q.forgetGuestDevices.run(room.id);
+    pinFailures.delete(room.id);
     hub.publish('room:update', { roomId: room.id, room: formatRoom(q.roomById.get(room.id)), reset: true });
-    res.json({ ok: true });
+    res.json({ ok: true, pin });
+  });
+
+  // Issue a different PIN for the current stay (e.g. the code was overheard).
+  // Phones that already entered the old code keep working.
+  app.post('/api/staff/rooms/:id/new-pin', auth.requireStaff, (req, res) => {
+    const room = q.roomById.get(Number(req.params.id));
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    const pin = newPin();
+    q.setPin.run(pin, room.id);
+    pinFailures.delete(room.id);
+    hub.publish('room:update', { roomId: room.id, room: formatRoom(q.roomById.get(room.id)) });
+    res.json({ pin });
   });
 
   app.get('/api/staff/stream', auth.requireStaff, (req, res) => {
@@ -489,7 +607,7 @@ function createApp(options = {}) {
     const skipped = [];
     for (const number of numbers) {
       try {
-        q.insertRoom.run(number, floor || null, newRoomToken());
+        q.insertRoom.run(number, floor || null, newRoomToken(), newPin());
         created.push(number);
       } catch (err) {
         if (String(err.message).includes('UNIQUE')) skipped.push(number);
@@ -526,17 +644,70 @@ function createApp(options = {}) {
 
   app.get('/api/admin/settings', auth.requireAdmin, (req, res) => res.json({ settings: getSettings() }));
 
+  const SETTING_CHECKS = {
+    timezone: (v) => isValidTimeZone(v) || 'Unknown time zone.',
+    overdue_minutes: (v) => (/^\d+$/.test(v) && +v >= 1 && +v <= 240) || 'Overdue minutes must be between 1 and 240.',
+    require_pin: (v) => ['true', 'false'].includes(v) || 'Invalid value for room code setting.',
+    currency: (v) => Intl.supportedValuesOf('currency').includes(v) || 'Unknown currency code, e.g. INR, USD, EUR.',
+  };
+
   app.put('/api/admin/settings', auth.requireAdmin, (req, res) => {
-    const current = getSettings();
-    for (const key of Object.keys(current)) {
-      const value = req.body?.[key];
+    const updates = [];
+    for (const key of Object.keys(getSettings())) {
+      let value = req.body?.[key];
       if (value === undefined) continue;
       if (typeof value !== 'string' || value.length > 500) {
         return res.status(400).json({ error: `Invalid value for ${key}.` });
       }
-      q.setSetting.run(value.trim(), key);
+      value = value.trim();
+      const check = SETTING_CHECKS[key]?.(value);
+      if (typeof check === 'string') return res.status(400).json({ error: check });
+      updates.push([value, key]);
     }
+    for (const [value, key] of updates) q.setSetting.run(value, key);
+    settingsCache = null;
     res.json({ settings: getSettings() });
+  });
+
+  // ---------------------------------------------------------------- menu (admin)
+  function parseMenuItem(body) {
+    const str = (v, max) => (typeof v === 'string' ? v.trim() : '').slice(0, max);
+    const category = str(body?.category, 40);
+    const name = str(body?.name, 80);
+    const description = str(body?.description, 200);
+    const price = Number(body?.price);
+    if (!category) return { error: 'Category is required.' };
+    if (!name) return { error: 'Name is required.' };
+    if (!Number.isFinite(price) || price < 0 || price > 1000000) return { error: 'Enter a valid price.' };
+    const veg = body?.veg === true ? 1 : body?.veg === false ? 0 : null;
+    const available = body?.available === false ? 0 : 1;
+    return { values: [category, name, description || null, Math.round(price * 100), veg, available] };
+  }
+
+  app.get('/api/admin/menu', auth.requireAdmin, (req, res) => {
+    res.json({ menu: q.menuAll.all().map(formatMenuItem) });
+  });
+
+  app.post('/api/admin/menu', auth.requireAdmin, (req, res) => {
+    const item = parseMenuItem(req.body);
+    if (item.error) return res.status(400).json({ error: item.error });
+    const info = q.insertMenuItem.run(...item.values);
+    res.status(201).json({ item: formatMenuItem(q.menuById.get(info.lastInsertRowid)) });
+  });
+
+  app.put('/api/admin/menu/:id', auth.requireAdmin, (req, res) => {
+    const existing = q.menuById.get(Number(req.params.id));
+    if (!existing) return res.status(404).json({ error: 'Menu item not found.' });
+    const item = parseMenuItem(req.body);
+    if (item.error) return res.status(400).json({ error: item.error });
+    q.updateMenuItem.run(...item.values, existing.id);
+    res.json({ item: formatMenuItem(q.menuById.get(existing.id)) });
+  });
+
+  app.delete('/api/admin/menu/:id', auth.requireAdmin, (req, res) => {
+    const info = q.deleteMenuItem.run(Number(req.params.id));
+    if (!info.changes) return res.status(404).json({ error: 'Menu item not found.' });
+    res.json({ ok: true });
   });
 
   app.get('/api/admin/staff', auth.requireAdmin, (req, res) => res.json({ staff: q.staffList.all() }));

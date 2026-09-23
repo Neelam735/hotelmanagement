@@ -208,3 +208,60 @@ th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
   body { background: #fff; }
   .qr-sheet { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ---------- room code (stay PIN) ---------- */
+.pin-input {
+  font-size: 2rem; letter-spacing: 0.6em; text-align: center; font-variant-numeric: tabular-nums;
+  padding-left: 0.6em; max-width: 240px; margin: 0 auto; display: block;
+}
+.pin-display {
+  font-size: 3rem; font-weight: 800; letter-spacing: 0.3em; text-align: center;
+  font-variant-numeric: tabular-nums; padding: 12px; border: 2px dashed var(--border); border-radius: var(--radius);
+}
+.pin-cell { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.1em; }
+.check-row { display: flex; gap: 10px; align-items: center; font-weight: 500; }
+.check-row input { width: auto; min-height: 0; }
+h3 { margin-top: 20px; font-size: 1rem; }
+
+/* ---------- due times & alerts ---------- */
+.attention {
+  background: var(--st-new-bg); color: var(--st-new); border: 2px solid var(--st-new);
+  border-radius: var(--radius); padding: 12px 16px; margin-bottom: 12px;
+}
+.attention ul { margin: 6px 0 0; padding-left: 20px; }
+.stat-alert { border-color: var(--st-new); background: var(--st-new-bg); color: var(--st-new); }
+.timing { font-weight: 600; font-size: 0.95rem; }
+.timing-scheduled { color: var(--muted); }
+.timing-due, .timing-overdue { color: var(--st-new); }
+.ticket.t-due, .ticket.t-overdue { border-left-color: var(--st-new); border-color: var(--st-new); }
+.ticket.t-due { animation: pulse 2s ease-in-out infinite; }
+.ticket.t-scheduled { opacity: 0.85; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 4px var(--st-new-bg); } }
+.due-line { font-weight: 600; }
+.btn-warn { background: var(--st-ack-bg); color: var(--st-ack); border-color: var(--st-ack); }
+@media (prefers-reduced-motion: reduce) {
+  .ticket.t-due, .ticket.flash { animation: none; }
+}
+
+/* ---------- food menu ---------- */
+.menu-category { margin: 16px 0 6px; font-size: 1rem; }
+.menu-category:first-child { margin-top: 0; }
+.menu-item {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.menu-text { min-width: 0; }
+.stepper { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.stepper .btn-sm { width: 36px; padding: 0; font-size: 1.2rem; }
+.stepper .qty { min-width: 1.5em; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.veg-dot {
+  display: inline-block; width: 12px; height: 12px; border: 2px solid; border-radius: 2px;
+  margin-right: 6px; vertical-align: -1px; position: relative;
+}
+.veg-dot::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: currentColor; }
+.veg-dot.veg { color: #1a9e4b; }
+.veg-dot.nonveg { color: #c0392b; }
+.cart-bar {
+  position: sticky; bottom: 0; margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--st-prog-bg); color: var(--st-prog); font-weight: 700; text-align: center;
+}

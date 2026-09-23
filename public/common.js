@@ -31,7 +31,7 @@ function h(tag, attrs, ...children) {
     else if (v === true) el.setAttribute(k, '');
     else el.setAttribute(k, v);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
@@ -79,4 +79,38 @@ function toast(message) {
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add('hidden'), 3500);
+}
+
+// Prices are in minor units (paise, cents).
+function formatMoney(minor, currency = 'INR') {
+  try {
+    return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : undefined, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: minor % 100 === 0 ? 0 : 2,
+    }).format(minor / 100);
+  } catch {
+    return `${(minor / 100).toFixed(2)} ${currency}`;
+  }
+}
+
+// "Today 06:00", "Tomorrow 06:00" or "Wed 24 Sep, 06:00" in the hotel's time zone.
+function formatDue(iso, timeZone) {
+  const date = new Date(iso);
+  const dayKey = (d) => new Intl.DateTimeFormat('en-CA', { timeZone }).format(d);
+  const time = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit' }).format(date);
+  const now = new Date();
+  if (dayKey(date) === dayKey(now)) return `Today ${time}`;
+  if (dayKey(date) === dayKey(new Date(now.getTime() + 864e5))) return `Tomorrow ${time}`;
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short' }).format(date);
+  return `${day}, ${time}`;
+}
+
+// "in 3 h 5 min" / "12 min ago"
+function relativeTime(iso) {
+  const diff = new Date(iso).getTime() - Date.now();
+  const mins = Math.round(Math.abs(diff) / 60000);
+  const text = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}`;
+  if (mins === 0) return 'now';
+  return diff > 0 ? `in ${text}` : `${text} ago`;
 }

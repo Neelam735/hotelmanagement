@@ -17,17 +17,28 @@
   <main class="guest-main stack">
     <div id="error" class="card hidden"><div class="alert" id="error-text"></div></div>
 
-    <section class="card" id="services-card">
+    <form class="card stack hidden" id="pin-card">
+      <h2>Enter your room code</h2>
+      <p class="muted">For your privacy, please enter the 4-digit code you received at check-in
+        (on your key card envelope). You only need to do this once per stay.</p>
+      <input id="pin" class="pin-input" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
+        autocomplete="one-time-code" aria-label="4-digit room code" required>
+      <div class="alert hidden" id="pin-error"></div>
+      <button class="btn-primary btn-block" type="submit">Continue</button>
+      <p class="small muted" id="pin-help"></p>
+    </form>
+
+    <section class="card hidden" id="services-card">
       <h2>How can we help?</h2>
       <div class="service-grid" id="services"></div>
     </section>
 
-    <section class="card" id="requests-card">
+    <section class="card hidden" id="requests-card">
       <h2>Your requests</h2>
       <div id="requests"><p class="muted">No requests yet. Tap a service above to get started.</p></div>
     </section>
 
-    <section class="card stack" id="room-card">
+    <section class="card stack hidden" id="room-card">
       <div class="switch">
         <div>
           <strong>Do Not Disturb</strong>

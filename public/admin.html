@@ -18,6 +18,7 @@
   <main class="container">
     <div class="tabs" role="tablist">
       <button type="button" role="tab" data-tab="rooms" aria-selected="true">Rooms &amp; QR codes</button>
+      <button type="button" role="tab" data-tab="menu" aria-selected="false">Food menu</button>
       <button type="button" role="tab" data-tab="staff" aria-selected="false">Staff</button>
       <button type="button" role="tab" data-tab="settings" aria-selected="false">Hotel settings</button>
       <button type="button" role="tab" data-tab="account" aria-selected="false">My password</button>
@@ -52,6 +53,43 @@
           <table>
             <thead><tr><th>Room</th><th>Floor</th><th>QR code</th><th>Guest link</th><th></th></tr></thead>
             <tbody id="rooms-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Menu -->
+    <section id="tab-menu" class="stack hidden">
+      <div class="card stack">
+        <h2 id="menu-form-title">Add menu item</h2>
+        <p class="small muted">Guests see available items when they tap <strong>Food &amp; Drinks</strong>.
+          With no items, guests type their order instead.</p>
+        <form id="menu-form" class="stack">
+          <div class="row">
+            <input id="m-category" placeholder="Category, e.g. Breakfast" aria-label="Category" list="m-categories" required maxlength="40">
+            <datalist id="m-categories"></datalist>
+            <input id="m-name" placeholder="Item name" aria-label="Item name" required maxlength="80">
+            <input id="m-price" type="number" min="0" step="0.01" placeholder="Price" aria-label="Price" required>
+          </div>
+          <div class="row">
+            <input id="m-description" placeholder="Short description (optional)" aria-label="Description" maxlength="200">
+            <select id="m-veg" aria-label="Veg or non-veg">
+              <option value="">No veg marker</option>
+              <option value="veg">🟢 Vegetarian</option>
+              <option value="nonveg">🔴 Non-vegetarian</option>
+            </select>
+          </div>
+          <div class="row">
+            <button class="btn-primary" type="submit" id="menu-submit">Add item</button>
+            <button type="button" class="hidden" id="menu-cancel-edit">Cancel editing</button>
+          </div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Available</th><th></th></tr></thead>
+            <tbody id="menu-body"></tbody>
           </table>
         </div>
       </div>
@@ -97,6 +135,29 @@
         <div class="field"><label for="s-reception_phone">Reception phone (for emergencies)</label><input id="s-reception_phone" maxlength="30"></div>
         <div class="field"><label for="s-wifi_name">Wi-Fi network name</label><input id="s-wifi_name" maxlength="100"></div>
         <div class="field"><label for="s-wifi_password">Wi-Fi password</label><input id="s-wifi_password" maxlength="100"></div>
+
+        <h3>Timing &amp; alerts</h3>
+        <div class="field">
+          <label for="s-timezone">Hotel time zone</label>
+          <select id="s-timezone"></select>
+          <p class="small muted">Wake-up calls and pickup times are in this time zone.</p>
+          <p class="small" id="tz-hint"></p>
+        </div>
+        <div class="field">
+          <label for="s-overdue_minutes">Flag a request as overdue if nobody picks it up within (minutes)</label>
+          <input id="s-overdue_minutes" type="number" min="1" max="240">
+        </div>
+
+        <h3>Guest access</h3>
+        <label class="check-row"><input type="checkbox" id="s-require_pin">
+          <span>Guests must enter the room code (changes at every checkout)</span></label>
+        <p class="small muted">Recommended. Stops previous guests from using the room's QR link after they leave.</p>
+
+        <h3>Food menu</h3>
+        <div class="field">
+          <label for="s-currency">Currency code</label>
+          <input id="s-currency" maxlength="3" placeholder="INR" autocapitalize="characters">
+        </div>
         <button class="btn-primary" type="submit">Save settings</button>
       </form>
     </section>

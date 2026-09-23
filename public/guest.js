@@ -2,13 +2,18 @@
   const token = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
   const base = `/api/guest/${encodeURIComponent(token)}`;
 
-  const state = { services: [], requests: [], current: null };
+  const state = { hotel: {}, services: [], menu: [], requests: [], current: null, cart: new Map(), stream: null };
   const $ = (id) => document.getElementById(id);
+  const MAIN_CARDS = ['services-card', 'requests-card', 'room-card'];
+
+  function show(ids, visible) {
+    for (const id of ids) $(id).classList.toggle('hidden', !visible);
+  }
 
   function showError(message) {
     $('error-text').textContent = message;
     $('error').classList.remove('hidden');
-    for (const id of ['services-card', 'requests-card', 'room-card', 'info-card']) $(id).classList.add('hidden');
+    show([...MAIN_CARDS, 'info-card', 'pin-card'], false);
   }
 
   function renderHeader(hotel, room) {
@@ -16,20 +21,47 @@
     $('hotel-name').textContent = hotel.name;
     $('room-label').textContent = `Room ${room.number}`;
     $('welcome').textContent = hotel.welcomeMessage;
-    $('dnd').checked = room.dnd;
+  }
 
+  function renderInfo(hotel) {
     const info = [];
     if (hotel.wifiName) info.push(['Wi-Fi network', hotel.wifiName]);
     if (hotel.wifiPassword) info.push(['Wi-Fi password', hotel.wifiPassword]);
     if (hotel.receptionPhone) {
       info.push(['Reception (emergencies)', h('a', { href: `tel:${hotel.receptionPhone}` }, hotel.receptionPhone)]);
     }
-    if (info.length) {
-      $('info').replaceChildren(...info.map(([k, v]) => h('div', {}, h('span', { class: 'muted' }, k), h('strong', {}, v))));
-      $('info-card').classList.remove('hidden');
-    }
+    $('info').replaceChildren(...info.map(([k, v]) => h('div', {}, h('span', { class: 'muted' }, k), h('strong', {}, v))));
+    $('info-card').classList.toggle('hidden', !info.length);
   }
 
+  // ---------------------------------------------------------------- room code
+  function showPinScreen(hotel) {
+    show(MAIN_CARDS, false);
+    $('pin-card').classList.remove('hidden');
+    $('pin-help').replaceChildren(
+      "Don't have a code? ",
+      hotel.receptionPhone ? h('a', { href: `tel:${hotel.receptionPhone}` }, 'Call reception') : 'Please ask reception',
+      '.'
+    );
+    renderInfo(hotel);
+    $('pin').focus();
+  }
+
+  $('pin-card').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('pin-error').classList.add('hidden');
+    try {
+      await api('POST', `${base}/verify`, { pin: $('pin').value });
+      $('pin').value = '';
+      $('pin-card').classList.add('hidden');
+      await start();
+    } catch (err) {
+      $('pin-error').textContent = err.message;
+      $('pin-error').classList.remove('hidden');
+    }
+  });
+
+  // ---------------------------------------------------------------- services
   function renderServices() {
     $('services').replaceChildren(
       ...state.services.map((s) =>
@@ -58,6 +90,7 @@
             'div',
             { class: 'body' },
             h('div', { class: 'row' }, h('strong', {}, r.serviceName), statusPill(r.status)),
+            r.dueAt ? h('div', { class: 'small due-line' }, `⏰ Scheduled for ${formatDue(r.dueAt, state.hotel.timezone)}`) : null,
             r.summary ? h('div', { class: 'small muted' }, r.summary) : null,
             r.note ? h('div', { class: 'small' }, `Note: ${r.note}`) : null,
             r.staffReply ? h('div', { class: 'reply small' }, h('strong', {}, 'Reception: '), r.staffReply) : null,
@@ -71,8 +104,86 @@
     );
   }
 
+  // ---------------------------------------------------------------- menu cart
+  function cartTotals() {
+    let count = 0;
+    let total = 0;
+    for (const item of state.menu) {
+      const qty = state.cart.get(item.id) || 0;
+      count += qty;
+      total += qty * item.price;
+    }
+    return { count, total };
+  }
+
+  function updateCartBar() {
+    const bar = $('dialog-fields').querySelector('.cart-bar');
+    if (!bar) return;
+    const { count, total } = cartTotals();
+    const money = formatMoney(total, state.hotel.currency);
+    bar.textContent = count ? `${count} item${count > 1 ? 's' : ''} · ${money}` : 'Your cart is empty';
+    $('dialog-submit').textContent = count ? `Place order · ${money}` : 'Place order';
+  }
+
+  function renderCart() {
+    const byCategory = new Map();
+    for (const item of state.menu) {
+      if (!byCategory.has(item.category)) byCategory.set(item.category, []);
+      byCategory.get(item.category).push(item);
+    }
+    const stepper = (item) => {
+      const qtyEl = h('span', { class: 'qty', 'aria-live': 'polite' }, state.cart.get(item.id) || 0);
+      const change = (delta) => {
+        const qty = Math.max(0, Math.min(20, (state.cart.get(item.id) || 0) + delta));
+        if (qty) state.cart.set(item.id, qty);
+        else state.cart.delete(item.id);
+        qtyEl.textContent = qty;
+        updateCartBar();
+      };
+      return h(
+        'div',
+        { class: 'stepper' },
+        h('button', { type: 'button', class: 'btn-sm', 'aria-label': `Remove one ${item.name}`, onclick: () => change(-1) }, '−'),
+        qtyEl,
+        h('button', { type: 'button', class: 'btn-sm', 'aria-label': `Add one ${item.name}`, onclick: () => change(1) }, '+')
+      );
+    };
+    return h(
+      'div',
+      { class: 'field menu' },
+      [...byCategory].map(([category, items]) => [
+        h('h3', { class: 'menu-category' }, category),
+        items.map((item) =>
+          h(
+            'div',
+            { class: 'menu-item' },
+            h(
+              'div',
+              { class: 'menu-text' },
+              h(
+                'div',
+                {},
+                item.veg === null
+                  ? null
+                  : h('span', { class: `veg-dot ${item.veg ? 'veg' : 'nonveg'}`, title: item.veg ? 'Vegetarian' : 'Non-vegetarian' }),
+                h('strong', {}, item.name)
+              ),
+              item.description ? h('div', { class: 'small muted' }, item.description) : null,
+              h('div', { class: 'small' }, formatMoney(item.price, state.hotel.currency))
+            ),
+            stepper(item)
+          )
+        ),
+      ]),
+      h('div', { class: 'cart-bar', role: 'status' })
+    );
+  }
+
+  // ---------------------------------------------------------------- request form
   function renderField(f) {
+    if (f.type === 'cart') return state.menu.length ? renderCart() : null;
     const id = `f-${f.name}`;
+    const label = !state.menu.length && f.labelWithoutMenu ? f.labelWithoutMenu : f.label;
     let input;
     if (f.type === 'select') {
       input = h(
@@ -85,7 +196,7 @@
       return h(
         'fieldset',
         { class: 'field', 'data-name': f.name },
-        h('legend', {}, h('strong', {}, f.label)),
+        h('legend', {}, h('strong', {}, label)),
         h(
           'div',
           { class: 'checklist' },
@@ -99,10 +210,12 @@
     } else {
       input = h('input', { id, name: f.name, type: f.type, required: f.required, maxlength: f.maxLength });
     }
+    // Without a menu, the free-text order is the only way to order, so it isn't optional.
+    const optional = !f.required && !(f.labelWithoutMenu && !state.menu.length);
     return h(
       'div',
       { class: 'field', 'data-field': f.name },
-      h('label', { for: id }, f.label, f.required ? '' : h('span', { class: 'muted small' }, ' (optional)')),
+      h('label', { for: id }, label, optional ? h('span', { class: 'muted small' }, ' (optional)') : ''),
       input
     );
   }
@@ -121,10 +234,13 @@
 
   function openDialog(service) {
     state.current = service;
+    state.cart = new Map();
     $('dialog-title').textContent = `${service.icon} ${service.name}`;
     $('dialog-desc').textContent = service.description;
-    $('dialog-fields').replaceChildren(...service.fields.map(renderField));
+    $('dialog-submit').textContent = 'Send request';
+    $('dialog-fields').replaceChildren(...service.fields.map(renderField).filter(Boolean));
     updateConditionalFields();
+    updateCartBar();
     $('note').value = '';
     $('dialog-error').classList.add('hidden');
     $('request-dialog').showModal();
@@ -134,7 +250,10 @@
     const form = $('request-form');
     const details = {};
     for (const f of service.fields) {
-      if (f.type === 'checklist') {
+      if (f.type === 'cart') {
+        const lines = [...state.cart].map(([id, qty]) => ({ id, qty }));
+        if (lines.length) details[f.name] = lines;
+      } else if (f.type === 'checklist') {
         details[f.name] = [...form.querySelectorAll(`input[name="${f.name}"]:checked`)].map((i) => i.value);
       } else {
         const el = form.elements[f.name];
@@ -146,16 +265,20 @@
     return details;
   }
 
+  function dialogError(message) {
+    $('dialog-error').textContent = message;
+    $('dialog-error').classList.remove('hidden');
+  }
+
   async function submitRequest(e) {
     e.preventDefault();
     const service = state.current;
     const details = collectDetails(service);
     for (const f of service.fields) {
-      if (f.type === 'checklist' && f.required && !details[f.name].length) {
-        $('dialog-error').textContent = `Please choose at least one item.`;
-        $('dialog-error').classList.remove('hidden');
-        return;
-      }
+      if (f.type === 'checklist' && f.required && !details[f.name].length) return dialogError('Please choose at least one item.');
+    }
+    if (service.requireOneOf && !service.requireOneOf.some((name) => details[name] !== undefined)) {
+      return dialogError(state.menu.length ? 'Please add at least one item to your order.' : 'Please tell us what you would like.');
     }
     $('dialog-submit').disabled = true;
     try {
@@ -169,8 +292,8 @@
       toast(`${service.name} request sent — we're on it!`);
       $('requests-card').scrollIntoView({ behavior: 'smooth' });
     } catch (err) {
-      $('dialog-error').textContent = err.message;
-      $('dialog-error').classList.remove('hidden');
+      if (err.status === 403) return relock();
+      dialogError(err.message);
     } finally {
       $('dialog-submit').disabled = false;
     }
@@ -182,6 +305,7 @@
       const { request } = await api('POST', `${base}/requests/${r.id}/cancel`);
       upsert(request);
     } catch (err) {
+      if (err.status === 403) return relock();
       toast(err.message);
     }
   }
@@ -193,14 +317,33 @@
     renderRequests();
   }
 
+  // The stay ended or the QR code was replaced: reload, which shows the code
+  // screen or an explanation.
+  function relock() {
+    if ($('request-dialog').open) $('request-dialog').close();
+    state.stream?.close();
+    state.stream = null;
+    start();
+  }
+
+  // ---------------------------------------------------------------- loading
   async function load() {
     try {
       const data = await api('GET', base);
-      state.services = data.services;
-      state.requests = data.requests;
+      state.hotel = data.hotel;
       renderHeader(data.hotel, data.room);
+      if (data.locked) {
+        showPinScreen(data.hotel);
+        return false;
+      }
+      state.services = data.services;
+      state.menu = data.menu;
+      state.requests = data.requests;
+      $('dnd').checked = data.room.dnd;
+      renderInfo(data.hotel);
       renderServices();
       renderRequests();
+      show(MAIN_CARDS, true);
       return true;
     } catch (err) {
       showError(err.status === 404 ? err.message : 'Could not load the page. Please check your connection and try again.');
@@ -210,6 +353,7 @@
 
   function listen() {
     const es = new EventSource(`${base}/stream`);
+    state.stream = es;
     const onRequest = (e) => {
       const { request } = JSON.parse(e.data);
       const previous = state.requests.find((r) => r.id === request.id);
@@ -223,12 +367,11 @@
     es.addEventListener('room:update', (e) => {
       const { room, reset } = JSON.parse(e.data);
       $('dnd').checked = room.dnd;
-      if (reset) load();
+      if (reset) relock();
     });
-    // A closed stream means the link stopped working (e.g. a new QR code was
-    // issued); reloading shows the guest the explanation.
+    // The browser gives up on the stream when access has ended.
     es.addEventListener('error', () => {
-      if (es.readyState === EventSource.CLOSED) load();
+      if (es.readyState === EventSource.CLOSED && state.stream === es) relock();
     });
     // Refresh when the stream reconnects so nothing is missed while offline.
     let opened = false;
@@ -236,6 +379,10 @@
       if (opened) load();
       opened = true;
     });
+  }
+
+  async function start() {
+    if (await load()) listen();
   }
 
   $('request-form').addEventListener('submit', submitRequest);
@@ -247,10 +394,11 @@
       toast(e.target.checked ? 'Do Not Disturb is on' : 'Do Not Disturb is off');
     } catch (err) {
       e.target.checked = !e.target.checked;
+      if (err.status === 403) return relock();
       toast(err.message);
     }
   });
   setInterval(renderRequests, 60000); // keep "x min ago" fresh
 
-  load().then((ok) => ok && listen());
+  start();
 })();

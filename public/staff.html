@@ -19,6 +19,7 @@
   </header>
 
   <main class="container">
+    <div class="attention hidden" id="attention" role="alert"></div>
     <div class="stats" id="stats"></div>
 
     <div class="filters">
@@ -38,7 +39,7 @@
     <div class="card hidden" id="rooms-view">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Room</th><th>Floor</th><th>Open requests</th><th>Status</th><th>Current stay since</th><th></th></tr></thead>
+          <thead><tr><th>Room</th><th>Floor</th><th>Room code</th><th>Open requests</th><th>Status</th><th>Current stay since</th><th></th></tr></thead>
           <tbody id="rooms-body"></tbody>
         </table>
       </div>
@@ -57,6 +58,16 @@
         <button type="button" id="reply-cancel">Cancel</button>
         <button type="submit" class="btn-primary">Send</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="pin-dialog">
+    <form method="dialog">
+      <h2 id="pin-dialog-title"></h2>
+      <p>Give the guest this room code (for example, write it on the key card envelope).
+        They enter it once when they scan the QR code.</p>
+      <div class="pin-display" id="pin-dialog-code"></div>
+      <div class="dialog-actions"><button class="btn-primary" type="submit">Done</button></div>
     </form>
   </dialog>
 

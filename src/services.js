@@ -6,6 +6,12 @@
 // A field with `showIf: { field, equals }` only applies when another field has
 // that value; it is hidden in the form, required when shown (if `required`),
 // and dropped from the submission otherwise.
+//
+// `schedule: { time, day? }` marks a service as happening at a set time: the
+// named fields give the time (and 'Today'/'Tomorrow'), from which the server
+// works out when it is due so the staff dashboard can remind staff.
+//
+// `requireOneOf: [...]` means at least one of those fields must be filled in.
 
 const DEPARTMENTS = {
   housekeeping: 'Housekeeping',
@@ -22,6 +28,7 @@ const SERVICES = [
     icon: '🧹',
     department: 'housekeeping',
     description: 'Request your room to be cleaned.',
+    schedule: { time: 'time' },
     fields: [
       {
         name: 'when',
@@ -106,8 +113,19 @@ const SERVICES = [
     icon: '🍽️',
     department: 'kitchen',
     description: 'Order food or drinks to your room.',
+    // Guests pick from the menu (managed on the admin page); if the hotel has
+    // no menu yet, they describe their order in words instead.
+    requireOneOf: ['items', 'order'],
     fields: [
-      { name: 'order', label: 'What would you like to order?', type: 'textarea', maxLength: 1000, required: true },
+      { name: 'items', label: 'Order', type: 'cart', required: false },
+      {
+        name: 'order',
+        label: 'Anything not on the menu?',
+        labelWithoutMenu: 'What would you like to order?',
+        type: 'textarea',
+        maxLength: 1000,
+        required: false,
+      },
       { name: 'guests', label: 'Number of people', type: 'number', min: 1, max: 20, required: false },
     ],
   },
@@ -134,6 +152,7 @@ const SERVICES = [
     icon: '⏰',
     department: 'front_desk',
     description: 'Schedule a wake-up call.',
+    schedule: { time: 'time', day: 'day' },
     fields: [
       { name: 'time', label: 'Wake-up time', type: 'time', required: true },
       {
@@ -159,6 +178,7 @@ const SERVICES = [
     icon: '🚕',
     department: 'front_desk',
     description: 'Book a taxi or airport transfer.',
+    schedule: { time: 'time', day: 'day' },
     fields: [
       {
         name: 'type',
@@ -167,6 +187,7 @@ const SERVICES = [
         options: ['Taxi', 'Airport transfer', 'Car rental enquiry'],
         required: true,
       },
+      { name: 'day', label: 'Day', type: 'select', options: ['Today', 'Tomorrow'], required: true },
       { name: 'time', label: 'Pickup time', type: 'time', required: true },
       { name: 'destination', label: 'Destination', type: 'text', maxLength: 200, required: false },
       { name: 'passengers', label: 'Passengers', type: 'number', min: 1, max: 20, required: false },
@@ -187,10 +208,48 @@ const SERVICE_MAP = new Map(SERVICES.map((s) => [s.id, s]));
 const STATUSES = ['new', 'acknowledged', 'in_progress', 'completed', 'cancelled'];
 const OPEN_STATUSES = ['new', 'acknowledged', 'in_progress'];
 
+const CART_MAX_LINES = 30;
+const CART_MAX_QTY = 20;
+
+// Prices are stored in minor units (paise, cents) to avoid rounding errors.
+function formatMoney(minor, currency = 'INR') {
+  try {
+    return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: minor % 100 === 0 ? 0 : 2,
+    }).format(minor / 100);
+  } catch {
+    return `${(minor / 100).toFixed(2)} ${currency}`;
+  }
+}
+
+// Resolves a guest's cart ([{ id, qty }]) against the available menu items,
+// snapshotting names and prices so later menu edits don't change old orders.
+function resolveCart(value, menu) {
+  if (!Array.isArray(value) || value.length > CART_MAX_LINES) return { error: 'Invalid order.' };
+  const qtyById = new Map();
+  for (const line of value) {
+    const id = Number(line?.id);
+    const qty = Number(line?.qty);
+    if (!Number.isInteger(id) || !Number.isInteger(qty) || qty < 1 || qty > CART_MAX_QTY) {
+      return { error: `Each item quantity must be between 1 and ${CART_MAX_QTY}.` };
+    }
+    const item = menu.get(id);
+    if (!item) return { error: 'Some items in your order are no longer available. Please review your order.' };
+    qtyById.set(id, Math.min(CART_MAX_QTY, (qtyById.get(id) || 0) + qty));
+  }
+  const lines = [...qtyById].map(([id, qty]) => {
+    const item = menu.get(id);
+    return { id, name: item.name, qty, price: item.price };
+  });
+  return { lines, total: lines.reduce((sum, l) => sum + l.qty * l.price, 0) };
+}
+
 // Validates guest-submitted details against the service's field definitions.
 // Returns { ok: true, details } with only known, normalised fields, or
-// { ok: false, error }.
-function validateDetails(service, input) {
+// { ok: false, error }. `ctx.menu` is a Map of available menu items by id.
+function validateDetails(service, input, ctx = {}) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const details = {};
 
@@ -228,6 +287,13 @@ function validateDetails(service, input) {
         value = n;
         break;
       }
+      case 'cart': {
+        const cart = resolveCart(value, ctx.menu || new Map());
+        if (cart.error) return { ok: false, error: cart.error };
+        value = cart.lines;
+        details.total = cart.total;
+        break;
+      }
       case 'time':
         if (typeof value !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
           return { ok: false, error: `"${field.label}" must be a valid time (HH:MM).` };
@@ -251,19 +317,36 @@ function validateDetails(service, input) {
     details[field.name] = value;
   }
 
+  if (service.requireOneOf && !service.requireOneOf.some((name) => details[name] !== undefined)) {
+    return { ok: false, error: 'Please add at least one item to your order.' };
+  }
+
   return { ok: true, details };
 }
 
 // Human-readable one-line summary of a request's details for dashboards.
-function summarize(service, details) {
+function summarize(service, details, { currency } = {}) {
   if (!service) return '';
   return service.fields
     .filter((f) => details[f.name] !== undefined)
     .map((f) => {
       const v = details[f.name];
+      if (f.type === 'cart') {
+        const items = v.map((l) => `${l.qty}× ${l.name}`).join(', ');
+        return `${f.label}: ${items} (${formatMoney(details.total, currency)})`;
+      }
       return `${f.label.replace(/[?:]$/, '')}: ${Array.isArray(v) ? v.join(', ') : v}`;
     })
     .join(' · ');
 }
 
-module.exports = { DEPARTMENTS, SERVICES, SERVICE_MAP, STATUSES, OPEN_STATUSES, validateDetails, summarize };
+module.exports = {
+  DEPARTMENTS,
+  SERVICES,
+  SERVICE_MAP,
+  STATUSES,
+  OPEN_STATUSES,
+  validateDetails,
+  summarize,
+  formatMoney,
+};
