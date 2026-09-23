@@ -2,6 +2,10 @@
 // Each service maps to a department (who handles it on the staff dashboard)
 // and declares the form fields the guest fills in. The guest UI renders
 // these fields dynamically and the server validates submissions against them.
+//
+// A field with `showIf: { field, equals }` only applies when another field has
+// that value; it is hidden in the form, required when shown (if `required`),
+// and dropped from the submission otherwise.
 
 const DEPARTMENTS = {
   housekeeping: 'Housekeeping',
@@ -26,7 +30,13 @@ const SERVICES = [
         options: ['As soon as possible', 'Within 1 hour', 'While I am out (anytime today)', 'At a specific time'],
         required: true,
       },
-      { name: 'time', label: 'Preferred time', type: 'time', required: false },
+      {
+        name: 'time',
+        label: 'Preferred time',
+        type: 'time',
+        required: true,
+        showIf: { field: 'when', equals: 'At a specific time' },
+      },
       {
         name: 'type',
         label: 'Type of cleaning',
@@ -185,6 +195,7 @@ function validateDetails(service, input) {
   const details = {};
 
   for (const field of service.fields) {
+    if (field.showIf && raw[field.showIf.field] !== field.showIf.equals) continue;
     let value = raw[field.name];
     const empty =
       value === undefined ||

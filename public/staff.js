@@ -225,10 +225,23 @@
     });
     es.addEventListener('error', () => {
       $('live').textContent = 'Reconnecting…';
+      // The browser gives up after a non-stream response (e.g. session expired):
+      // find out why and retry ourselves.
+      if (es.readyState === EventSource.CLOSED) {
+        api('GET', '/api/auth/me')
+          .then(() =>
+            setTimeout(() => {
+              listen();
+              loadRequests().catch(handleError);
+            }, 3000)
+          )
+          .catch(handleError);
+      }
     });
     es.addEventListener('request:new', (e) => {
       const { request } = JSON.parse(e.data);
       state.requests.set(request.id, request);
+      if (state.scope === 'rooms') loadRooms().catch(handleError);
       renderBoard();
       if (!state.department || request.department === state.department) {
         beep();
@@ -239,6 +252,7 @@
     es.addEventListener('request:update', (e) => {
       const { request } = JSON.parse(e.data);
       state.requests.set(request.id, request);
+      if (state.scope === 'rooms') loadRooms().catch(handleError);
       renderBoard();
     });
     es.addEventListener('room:update', (e) => {

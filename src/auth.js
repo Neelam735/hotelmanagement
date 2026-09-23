@@ -28,7 +28,12 @@ function parseCookies(header) {
   return out;
 }
 
+// Compared against when the username doesn't exist, so response time doesn't
+// reveal which usernames are valid.
+let dummyHash;
+
 function createAuth(db, { secureCookies = false } = {}) {
+  dummyHash ??= hashPassword(crypto.randomBytes(16).toString('hex'));
   const stmts = {
     staffByUsername: db.prepare('SELECT * FROM staff WHERE username = ?'),
     insertSession: db.prepare('INSERT INTO sessions (token, staff_id, expires_at) VALUES (?, ?, ?)'),
@@ -38,6 +43,7 @@ function createAuth(db, { secureCookies = false } = {}) {
         WHERE x.token = ? AND x.expires_at > ?`
     ),
     deleteSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
+    deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE staff_id = ? AND token != ?'),
     purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
   };
 
@@ -56,10 +62,7 @@ function createAuth(db, { secureCookies = false } = {}) {
 
   function login(username, password) {
     const staff = stmts.staffByUsername.get(String(username || '').trim().toLowerCase());
-    // Always run scrypt so response time doesn't reveal whether the user exists.
-    const ok = staff
-      ? verifyPassword(String(password || ''), staff.password_hash)
-      : (verifyPassword(String(password || ''), hashPassword('dummy')), false);
+    const ok = verifyPassword(String(password || ''), staff ? staff.password_hash : dummyHash) && Boolean(staff);
     if (!ok) return null;
 
     stmts.purgeSessions.run(new Date().toISOString());
@@ -72,6 +75,13 @@ function createAuth(db, { secureCookies = false } = {}) {
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     if (token) stmts.deleteSession.run(token);
     return cookie('', 0);
+  }
+
+  // After a password change, sign out every other device using this account.
+  function logoutOtherSessions(req) {
+    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    const staff = currentStaff(req);
+    if (staff && token) stmts.deleteOtherSessions.run(staff.id, token);
   }
 
   function currentStaff(req) {
@@ -94,7 +104,7 @@ function createAuth(db, { secureCookies = false } = {}) {
     });
   }
 
-  return { login, logout, currentStaff, requireStaff, requireAdmin };
+  return { login, logout, logoutOtherSessions, currentStaff, requireStaff, requireAdmin };
 }
 
 module.exports = { createAuth, hashPassword, verifyPassword, parseCookies };

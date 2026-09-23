@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS requests (
   department  TEXT NOT NULL,
   details     TEXT NOT NULL DEFAULT '{}',
   note        TEXT,
+  device_id   TEXT,
   status      TEXT NOT NULL DEFAULT 'new',
   staff_reply TEXT,
   handled_by  TEXT,
@@ -78,6 +79,11 @@ function openDatabase(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+
+  // Migrations for databases created by earlier versions.
+  const requestCols = db.prepare('PRAGMA table_info(requests)').all().map((c) => c.name);
+  if (!requestCols.includes('device_id')) db.exec('ALTER TABLE requests ADD COLUMN device_id TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_requests_device ON requests(device_id)');
 
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insertSetting.run(k, v);

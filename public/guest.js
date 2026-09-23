@@ -101,10 +101,22 @@
     }
     return h(
       'div',
-      { class: 'field' },
+      { class: 'field', 'data-field': f.name },
       h('label', { for: id }, f.label, f.required ? '' : h('span', { class: 'muted small' }, ' (optional)')),
       input
     );
+  }
+
+  // Shows fields whose `showIf` condition is met; hidden ones are disabled so
+  // the browser skips their validation and they aren't submitted.
+  function updateConditionalFields() {
+    const form = $('request-form');
+    for (const f of state.current.fields) {
+      if (!f.showIf) continue;
+      const visible = form.elements[f.showIf.field]?.value === f.showIf.equals;
+      form.querySelector(`[data-field="${f.name}"]`).classList.toggle('hidden', !visible);
+      form.elements[f.name].disabled = !visible;
+    }
   }
 
   function openDialog(service) {
@@ -112,6 +124,7 @@
     $('dialog-title').textContent = `${service.icon} ${service.name}`;
     $('dialog-desc').textContent = service.description;
     $('dialog-fields').replaceChildren(...service.fields.map(renderField));
+    updateConditionalFields();
     $('note').value = '';
     $('dialog-error').classList.add('hidden');
     $('request-dialog').showModal();
@@ -125,6 +138,7 @@
         details[f.name] = [...form.querySelectorAll(`input[name="${f.name}"]:checked`)].map((i) => i.value);
       } else {
         const el = form.elements[f.name];
+        if (el.disabled) continue;
         const v = el.value.trim();
         if (v !== '') details[f.name] = f.type === 'number' ? Number(v) : v;
       }
@@ -211,6 +225,11 @@
       $('dnd').checked = room.dnd;
       if (reset) load();
     });
+    // A closed stream means the link stopped working (e.g. a new QR code was
+    // issued); reloading shows the guest the explanation.
+    es.addEventListener('error', () => {
+      if (es.readyState === EventSource.CLOSED) load();
+    });
     // Refresh when the stream reconnects so nothing is missed while offline.
     let opened = false;
     es.addEventListener('open', () => {
@@ -220,6 +239,7 @@
   }
 
   $('request-form').addEventListener('submit', submitRequest);
+  $('request-form').addEventListener('change', updateConditionalFields);
   $('dialog-cancel').addEventListener('click', () => $('request-dialog').close());
   $('dnd').addEventListener('change', async (e) => {
     try {

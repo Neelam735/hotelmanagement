@@ -4,7 +4,7 @@ const express = require('express');
 const QRCode = require('qrcode');
 
 const { openDatabase, newRoomToken } = require('./db');
-const { createAuth, hashPassword, verifyPassword } = require('./auth');
+const { createAuth, hashPassword, verifyPassword, parseCookies } = require('./auth');
 const { createEventHub } = require('./events');
 const {
   DEPARTMENTS,
@@ -18,11 +18,22 @@ const {
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
-// Guest abuse limits (per room): someone who photographs a QR code shouldn't
-// be able to flood the dashboard.
+// Guest abuse limits: someone who photographs a QR code shouldn't be able to
+// flood the dashboard. Open requests are limited per phone so a stray device
+// can't lock the real guest out; the hourly cap per room is the backstop.
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
-const GUEST_MAX_PER_WINDOW = 20;
-const GUEST_MAX_OPEN = 15;
+const GUEST_MAX_PER_WINDOW = 30;
+const GUEST_MAX_OPEN_PER_DEVICE = 10;
+
+// Each guest phone gets a random device id. A room's QR link never changes
+// between stays, so without this a previous guest could reopen the link and
+// read the next guest's requests.
+const DEVICE_COOKIE = 'hm_device';
+const DEVICE_TTL_SEC = 60 * 24 * 60 * 60;
+
+// Staff login throttling (per IP + username).
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 10;
 const NOTE_MAX = 500;
 const REPLY_MAX = 500;
 
@@ -81,7 +92,7 @@ function createApp(options = {}) {
         WHERE room_id = ? AND status IN ('new','acknowledged','in_progress')`
     ),
     insertRequest: db.prepare(
-      'INSERT INTO requests (room_id, service, department, details, note) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO requests (room_id, service, department, details, note, device_id) VALUES (?, ?, ?, ?, ?, ?)'
     ),
     requestById: db.prepare(
       `SELECT x.*, r.number AS room_number, r.dnd AS room_dnd
@@ -90,12 +101,12 @@ function createApp(options = {}) {
     guestRequests: db.prepare(
       `SELECT x.*, r.number AS room_number, r.dnd AS room_dnd
          FROM requests x JOIN rooms r ON r.id = x.room_id
-        WHERE x.room_id = ? AND x.created_at >= ?
+        WHERE x.room_id = ? AND x.device_id = ? AND x.created_at >= ?
         ORDER BY x.created_at DESC LIMIT 50`
     ),
-    openCountForRoom: db.prepare(
+    openCountForDevice: db.prepare(
       `SELECT COUNT(*) AS n FROM requests
-        WHERE room_id = ? AND status IN ('new','acknowledged','in_progress')`
+        WHERE room_id = ? AND device_id = ? AND status IN ('new','acknowledged','in_progress')`
     ),
     recentCountForRoom: db.prepare('SELECT COUNT(*) AS n FROM requests WHERE room_id = ? AND created_at >= ?'),
     updateRequest: db.prepare(
@@ -166,6 +177,7 @@ function createApp(options = {}) {
   function publishRequest(type, row) {
     hub.publish(type, {
       roomId: row.room_id,
+      deviceId: row.device_id,
       request: formatRequest(row),
       guestRequest: formatRequest(row, { forGuest: true }),
     });
@@ -222,6 +234,25 @@ function createApp(options = {}) {
     const room = q.roomByToken.get(String(req.params.token));
     if (!room) return res.status(404).json({ error: 'This QR code is no longer valid. Please contact reception.' });
     req.room = room;
+
+    let deviceId = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+    if (!/^[\w-]{22,64}$/.test(deviceId || '')) {
+      deviceId = crypto.randomBytes(18).toString('base64url');
+      res.append(
+        'Set-Cookie',
+        [
+          `${DEVICE_COOKIE}=${deviceId}`,
+          'Path=/api/guest',
+          'HttpOnly',
+          'SameSite=Lax',
+          `Max-Age=${DEVICE_TTL_SEC}`,
+          secureCookies ? 'Secure' : null,
+        ]
+          .filter(Boolean)
+          .join('; ')
+      );
+    }
+    req.deviceId = deviceId;
     next();
   }
 
@@ -238,7 +269,7 @@ function createApp(options = {}) {
       room: { number: req.room.number, dnd: Boolean(req.room.dnd) },
       services: SERVICES,
       requests: q.guestRequests
-        .all(req.room.id, req.room.stay_started_at)
+        .all(req.room.id, req.deviceId, req.room.stay_started_at)
         .map((r) => formatRequest(r, { forGuest: true })),
     });
   });
@@ -258,11 +289,18 @@ function createApp(options = {}) {
     if (q.recentCountForRoom.get(room.id, since).n >= GUEST_MAX_PER_WINDOW) {
       return res.status(429).json({ error: 'Too many requests from this room. Please call reception.' });
     }
-    if (q.openCountForRoom.get(room.id).n >= GUEST_MAX_OPEN) {
+    if (q.openCountForDevice.get(room.id, req.deviceId).n >= GUEST_MAX_OPEN_PER_DEVICE) {
       return res.status(429).json({ error: 'You have many open requests. Please wait for them to be completed.' });
     }
 
-    const info = q.insertRequest.run(room.id, service.id, service.department, JSON.stringify(result.details), note || null);
+    const info = q.insertRequest.run(
+      room.id,
+      service.id,
+      service.department,
+      JSON.stringify(result.details),
+      note || null,
+      req.deviceId
+    );
     const row = q.requestById.get(info.lastInsertRowid);
     publishRequest('request:new', row);
     res.status(201).json({ request: formatRequest(row, { forGuest: true }) });
@@ -270,7 +308,9 @@ function createApp(options = {}) {
 
   app.post('/api/guest/:token/requests/:id/cancel', loadRoom, (req, res) => {
     const row = q.requestById.get(Number(req.params.id));
-    if (!row || row.room_id !== req.room.id) return res.status(404).json({ error: 'Request not found.' });
+    if (!row || row.room_id !== req.room.id || row.device_id !== req.deviceId) {
+      return res.status(404).json({ error: 'Request not found.' });
+    }
     if (!['new', 'acknowledged'].includes(row.status)) {
       return res.status(409).json({ error: 'This request is already being handled and can no longer be cancelled.' });
     }
@@ -288,20 +328,39 @@ function createApp(options = {}) {
   });
 
   app.get('/api/guest/:token/stream', loadRoom, (req, res) => {
-    const roomId = req.room.id;
+    const { id: roomId, token } = req.room;
+    const deviceId = req.deviceId;
     hub.subscribe(
       req,
       res,
-      (type, payload) => payload.roomId === roomId,
+      (type, payload) => {
+        if (payload.roomId !== roomId) return false;
+        // Stop streaming to a link that has been replaced with a new QR code.
+        if (q.roomByToken.get(token)?.id !== roomId) return 'drop';
+        return type === 'room:update' || payload.deviceId === deviceId;
+      },
       (type, payload) =>
         payload.guestRequest ? { request: payload.guestRequest } : { room: { dnd: payload.room.dnd }, reset: payload.reset }
     );
   });
 
   // ---------------------------------------------------------------- auth API
+  const loginFailures = new Map(); // "ip|username" -> [timestamps]
   app.post('/api/auth/login', (req, res) => {
+    const key = `${req.ip}|${String(req.body?.username || '').trim().toLowerCase()}`;
+    const cutoff = Date.now() - LOGIN_WINDOW_MS;
+    const recent = (loginFailures.get(key) || []).filter((t) => t > cutoff);
+    if (recent.length >= LOGIN_MAX_FAILURES) {
+      return res.status(429).json({ error: 'Too many failed sign-in attempts. Please wait 15 minutes.' });
+    }
     const session = auth.login(req.body?.username, req.body?.password);
-    if (!session) return res.status(401).json({ error: 'Invalid username or password.' });
+    if (!session) {
+      recent.push(Date.now());
+      loginFailures.set(key, recent);
+      if (loginFailures.size > 10000) loginFailures.delete(loginFailures.keys().next().value);
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+    loginFailures.delete(key);
     res.set('Set-Cookie', session.cookie);
     res.json({ ok: true });
   });
@@ -322,6 +381,7 @@ function createApp(options = {}) {
       return res.status(400).json({ error: 'New password must be at least 8 characters.' });
     }
     q.setPassword.run(hashPassword(newPassword), req.staff.id);
+    auth.logoutOtherSessions(req);
     res.json({ ok: true });
   });
 
@@ -391,7 +451,13 @@ function createApp(options = {}) {
   });
 
   app.get('/api/staff/stream', auth.requireStaff, (req, res) => {
-    hub.subscribe(req, res, () => true, (type, { guestRequest, ...rest }) => rest);
+    hub.subscribe(
+      req,
+      res,
+      // Stop streaming once the session ends (sign-out, expiry, account removed).
+      () => (auth.currentStaff(req) ? true : 'drop'),
+      (type, { guestRequest, deviceId, ...rest }) => rest
+    );
   });
 
   // ---------------------------------------------------------------- admin API
