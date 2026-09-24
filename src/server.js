@@ -1,19 +1,34 @@
-const path = require('node:path');
 const { createApp } = require('./app');
+const { loadConfig } = require('./config');
 
-const port = Number(process.env.PORT) || 3000;
+const { port, options, warnings } = loadConfig();
+for (const warning of warnings) console.warn(`WARNING: ${warning}`);
 
-const { app } = createApp({
-  dbFile: process.env.DB_FILE || path.join(__dirname, '..', 'data', 'hotel.db'),
-  adminUsername: process.env.ADMIN_USERNAME || 'admin',
-  adminPassword: process.env.ADMIN_PASSWORD,
-  publicUrl: process.env.PUBLIC_URL,
-  secureCookies: process.env.SECURE_COOKIES === 'true',
-  trustProxy: process.env.TRUST_PROXY || false,
+const { app, close, closeStreams } = createApp(options);
+
+const server = app.listen(port, () => {
+  const base = options.publicUrl || `http://localhost:${port}`;
+  console.log(`Hotel QR service running on port ${port}`);
+  console.log(`  Staff dashboard: ${base}/staff`);
+  console.log(`  Admin (rooms & QR codes): ${base}/admin`);
+  console.log(`  Database: ${options.dbFile}`);
 });
 
-app.listen(port, () => {
-  console.log(`Hotel QR service running on http://localhost:${port}`);
-  console.log(`  Staff dashboard: http://localhost:${port}/staff`);
-  console.log(`  Admin (rooms & QR codes): http://localhost:${port}/admin`);
-});
+// Hosting platforms (Railway, Docker…) send SIGTERM before replacing the
+// container: stop taking requests, end live streams and close the database.
+let stopping = false;
+function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`${signal} received, shutting down…`);
+  // Live-update streams never end on their own; close them so in-flight
+  // requests can finish, then close the database.
+  closeStreams();
+  server.close(() => {
+    close();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 8000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

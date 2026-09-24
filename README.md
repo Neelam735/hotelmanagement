@@ -83,16 +83,38 @@ First-time setup:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `3000` | HTTP port |
-| `PUBLIC_URL` | taken from the incoming request | Public address encoded in the QR codes, e.g. `https://rooms.myhotel.com`. **Set this in production.** |
-| `DB_FILE` | `data/hotel.db` | SQLite database file |
+| `PORT` | `3000` | HTTP port (Railway sets this) |
+| `PUBLIC_URL` | `https://$RAILWAY_PUBLIC_DOMAIN` on Railway, otherwise the address the admin page was opened with | Public address encoded in the QR codes, e.g. `https://rooms.myhotel.com`. **Set this if you use your own domain.** |
+| `DB_FILE` | `$RAILWAY_VOLUME_MOUNT_PATH/hotel.db` on Railway, otherwise `data/hotel.db` | SQLite database file |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / random | First admin account (used only when the database is empty) |
 | `HOTEL_TIMEZONE` | server time zone | Initial hotel time zone, e.g. `Asia/Kolkata` (can be changed later under Hotel settings) |
-| `SECURE_COOKIES` | `false` | Set `true` when served over HTTPS |
-| `TRUST_PROXY` | off | Set, for example to `1`, when running behind a reverse proxy or load balancer |
+| `SECURE_COOKIES` | `true` on Railway, otherwise `false` | Set `true` when served over HTTPS |
+| `TRUST_PROXY` | `1` on Railway, otherwise off | Number of reverse proxies in front of the app |
 
 Guests' phones must be able to reach the server. That means either a public
 HTTPS address, or the hotel's guest Wi-Fi network if you host it locally.
+
+## Deploying on Railway
+
+The app is ready for [Railway](https://railway.com): `railway.json` sets the start
+command, a health check (`/healthz`) and restart policy. Railway's own variables
+set the public address, HTTPS cookies and proxy handling automatically.
+
+1. **Create the service.** On Railway, choose **New Project → Deploy from GitHub repo** and pick this repository. If Railway doesn't pick the right branch, set it under the service's **Settings → Source**.
+2. **Add a volume. Don't skip this.** Open the service, press **⌘K / Ctrl+K**, choose **Add Volume**, and set the mount path to `/data`. The database lives on this volume. Without it, **all rooms, staff and requests are erased on every deploy**, and the deploy log shows a warning.
+3. **Set variables** under the service's **Variables** tab:
+   - `ADMIN_PASSWORD`: a strong password for the first admin login.
+   - `HOTEL_TIMEZONE`: e.g. `Asia/Kolkata`. Railway servers run on UTC, and wake-up calls use this setting.
+4. **Get a public address.** Under **Settings → Networking**, press **Generate Domain**, or add your own domain. With your own domain, also set `PUBLIC_URL`, e.g. `https://rooms.yourhotel.com`, so the QR codes use it.
+5. **Deploy.** When it's live, open `https://<your-domain>/admin`, sign in as `admin`, and follow the first-time setup above.
+
+**Print QR codes only after the final domain is set up.** The domain is inside the QR
+codes: if it changes later, reprint them (Admin → Print all QR codes).
+
+Notes:
+- Run a **single instance** (Railway's default). The database is a file on the volume, and live updates are sent from one process.
+- Railway may cut long-lived connections now and then. The dashboard and guest pages reconnect by themselves and catch up on anything they missed.
+- Back up the volume: turn on scheduled backups in the volume's settings if your Railway plan includes them, or copy `/data/hotel.db` out using `railway ssh`.
 
 ## Security notes
 

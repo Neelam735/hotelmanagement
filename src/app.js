@@ -263,6 +263,12 @@ function createApp(options = {}) {
     next();
   });
 
+  // Used by the hosting platform to check the app is up and the database readable.
+  app.get('/healthz', (req, res) => {
+    db.prepare('SELECT 1').get();
+    res.set('Cache-Control', 'no-store').json({ ok: true });
+  });
+
   // ---------------------------------------------------------------- pages
   app.get('/', (req, res) => res.redirect('/staff'));
   app.get('/r/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'guest.html')));
@@ -763,7 +769,7 @@ function createApp(options = {}) {
     db.close();
   }
 
-  return { app, db, close, generatedAdminPassword };
+  return { app, db, close, closeStreams: hub.closeAll, generatedAdminPassword };
 }
 
 module.exports = { createApp };
